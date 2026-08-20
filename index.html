@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web Extended Screen</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            width: 90%;
+            max-width: 450px;
+            background: #1e293b;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+            text-align: center;
+        }
+        h2 { margin-bottom: 16px; font-size: 1.4rem; color: #38bdf8; }
+        p { font-size: 0.9rem; color: #94a3b8; margin-bottom: 20px; line-height: 1.4; }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .btn-primary { background: #0284c7; color: white; }
+        .btn-primary:hover { background: #0369a1; }
+        .btn-success { background: #16a34a; color: white; }
+        .btn-success:hover { background: #15803d; }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            background: #0f172a;
+            color: #fff;
+            font-size: 1.1rem;
+            text-align: center;
+            letter-spacing: 2px;
+            margin-bottom: 12px;
+            outline: none;
+        }
+        .code-box {
+            font-size: 1.8rem;
+            font-weight: bold;
+            letter-spacing: 4px;
+            color: #38bdf8;
+            background: #0f172a;
+            padding: 12px;
+            border-radius: 8px;
+            margin: 15px 0;
+            user-select: all;
+        }
+        .hidden { display: none !important; }
+        
+        /* Fullscreen Video View for Tablet */
+        #display-view {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+            z-index: 9999;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        video {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+        }
+        .status { font-size: 0.85rem; color: #fbbf24; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="selection-card" class="container">
+        <h2>Extended Screen Hub</h2>
+        <p>Choose the role for this device:</p>
+        <button class="btn btn-primary" onclick="setupSender()">💻 Laptop (Share Screen)</button>
+        <button class="btn btn-success" onclick="showReceiverSetup()">📱 Tablet (Display Screen)</button>
+    </div>
+
+    <div id="sender-card" class="container hidden">
+        <h2>Broadcasting Screen</h2>
+        <p>Enter this 4-digit code on your Dell Venue tablet:</p>
+        <div id="room-code" class="code-box">----</div>
+        <p class="status" id="sender-status">Waiting for tablet to connect...</p>
+    </div>
+
+    <div id="receiver-card" class="container hidden">
+        <h2>Connect to Laptop</h2>
+        <p>Enter the 4-digit code shown on your laptop:</p>
+        <input type="text" id="join-code" placeholder="e.g. 4821" maxlength="4" inputmode="numeric">
+        <button class="btn btn-success" onclick="connectToSender()">Connect & Display</button>
+        <p class="status" id="receiver-status"></p>
+    </div>
+
+    <div id="display-view" class="hidden">
+        <video id="remote-video" autoplay playsinline muted></video>
+    </div>
+
+    <script>
+        const PREFIX = "tab-screen-";
+        let peer = null;
+
+        function generateRandomCode() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        // ================= LAPTOP (SENDER) =================
+        async function setupSender() {
+            try {
+                // Request screen sharing
+                const stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { frameRate: { ideal: 30, max: 60 } },
+                    audio: false
+                });
+
+                const code = generateRandomCode();
+                document.getElementById('room-code').innerText = code;
+                
+                // Initialize Peer with unique room code
+                peer = new Peer(PREFIX + code);
+
+                peer.on('open', () => {
+                    document.getElementById('selection-card').classList.add('hidden');
+                    document.getElementById('sender-card').classList.remove('hidden');
+                });
+
+                peer.on('call', (call) => {
+                    document.getElementById('sender-status').innerText = "Tablet connected! Streaming active.";
+                    document.getElementById('sender-status').style.color = "#4ade80";
+                    call.answer(stream); // Send laptop video stream to tablet
+                });
+
+                peer.on('error', (err) => {
+                    alert("Connection error: " + err.type);
+                });
+
+                // Reset UI if user stops sharing from browser toolbar
+                stream.getVideoTracks()[0].onended = () => {
+                    location.reload();
+                };
+
+            } catch (err) {
+                alert("Screen share permission denied or not supported.");
+            }
+        }
+
+        // ================= TABLET (RECEIVER) =================
+        function showReceiverSetup() {
+            document.getElementById('selection-card').classList.add('hidden');
+            document.getElementById('receiver-card').classList.remove('hidden');
+        }
+
+        function connectToSender() {
+            const code = document.getElementById('join-code').value.trim();
+            if (code.length !== 4) {
+                alert("Please enter a valid 4-digit code.");
+                return;
+            }
+
+            const statusEl = document.getElementById('receiver-status');
+            statusEl.innerText = "Connecting to laptop...";
+
+            // Create temporary peer for tablet
+            peer = new Peer();
+
+            peer.on('open', () => {
+                // Call the laptop peer
+                const call = peer.call(PREFIX + code, null);
+
+                call.on('stream', (remoteStream) => {
+                    document.getElementById('receiver-card').classList.add('hidden');
+                    const displayView = document.getElementById('display-view');
+                    const video = document.getElementById('remote-video');
+                    
+                    displayView.classList.remove('hidden');
+                    video.srcObject = remoteStream;
+                    video.play();
+
+                    // Attempt fullscreen for KitKat browser
+                    if (displayView.requestFullscreen) {
+                        displayView.requestFullscreen();
+                    } else if (displayView.webkitRequestFullscreen) {
+                        displayView.webkitRequestFullscreen();
+                    }
+                });
+
+                call.on('close', () => {
+                    alert("Stream ended by laptop.");
+                    location.reload();
+                });
+
+                call.on('error', () => {
+                    statusEl.innerText = "Failed to connect. Check code.";
+                    statusEl.style.color = "#f87171";
+                });
+            });
+
+            peer.on('error', (err) => {
+                statusEl.innerText = "Error: Invalid code or host offline.";
+                statusEl.style.color = "#f87171";
+            });
+        }
+    </script>
+</body>
+</html>
