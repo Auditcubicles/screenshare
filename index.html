@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Extended Display Hub</title>
+    <!-- Modern unified PeerJS bundle compatible with legacy shims -->
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: none;
+        }
+        .container {
+            width: 90%;
+            max-width: 400px;
+            background: #1e293b;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+        h2 { margin-bottom: 12px; font-size: 1.3rem; color: #38bdf8; }
+        p { font-size: 0.88rem; color: #94a3b8; margin-bottom: 20px; line-height: 1.4; }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .btn-primary { background: #0284c7; color: white; }
+        .btn-success { background: #16a34a; color: white; }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            background: #0f172a;
+            color: #fff;
+            font-size: 1.4rem;
+            text-align: center;
+            letter-spacing: 4px;
+            margin-bottom: 12px;
+            outline: none;
+        }
+        .code-box {
+            font-size: 2rem;
+            font-weight: bold;
+            letter-spacing: 6px;
+            color: #38bdf8;
+            background: #0f172a;
+            padding: 14px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        .hidden { display: none !important; }
+        
+        #display-view {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            background: #000;
+            z-index: 99999;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        video, #fallback-canvas {
+            width: 100vw;
+            height: 100vh;
+            object-fit: fill;
+        }
+        .status { font-size: 0.85rem; color: #fbbf24; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <!-- Selection Screen -->
+    <div id="selection-card" class="container">
+        <h2>Extended Screen Hub</h2>
+        <p>Choose device role:</p>
+        <button class="btn btn-primary" onclick="initLaptop()">💻 Laptop (Host Screen)</button>
+        <button class="btn btn-success" onclick="showTabletLogin()">📱 Dell Venue Tablet</button>
+    </div>
+
+    <!-- Laptop Host Screen -->
+    <div id="laptop-card" class="container hidden">
+        <h2>Host PIN</h2>
+        <p>Enter this 4-digit code on your tablet:</p>
+        <div id="display-pin" class="code-box">----</div>
+        <p class="status" id="host-status">Waiting for tablet...</p>
+    </div>
+
+    <!-- Tablet Login Screen -->
+    <div id="tablet-card" class="container hidden">
+        <h2>Enter Laptop PIN</h2>
+        <p>Type the 4-digit code from your laptop:</p>
+        <input type="text" id="input-pin" placeholder="••••" maxlength="4" />
+        <button class="btn btn-success" onclick="connectTablet()">Connect</button>
+        <p class="status" id="tablet-status"></p>
+    </div>
+
+    <!-- Fullscreen Video/Canvas Viewport -->
+    <div id="display-view" class="hidden">
+        <video id="stream-video" autoplay playsinline muted></video>
+        <canvas id="fallback-canvas" class="hidden"></canvas>
+    </div>
+
+    <script>
+        var PREFIX = "dellv7-scr-";
+        var peer = null;
+        var activeDataConn = null;
+        var localStream = null;
+
+        // PeerJS Cloud Configuration with Google STUN Fallbacks
+        var PEER_CONFIG = {
+            debug: 1,
+            config: {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+            }
+        };
+
+        function getRandomPin() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        // ================= LAPTOP (HOST) =================
+        function initLaptop() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                alert("Screen capture not supported in this browser. Use Chrome/Edge.");
+                return;
+            }
+
+            navigator.mediaDevices.getDisplayMedia({
+                video: { frameRate: { ideal: 30 } },
+                audio: false
+            }).then(function(stream) {
+                localStream = stream;
+                var pin = getRandomPin();
+                document.getElementById('display-pin').innerText = pin;
+                document.getElementById('selection-card').className += " hidden";
+                document.getElementById('laptop-card').className = document.getElementById('laptop-card').className.replace("hidden", "");
+
+                peer = new Peer(PREFIX + pin, PEER_CONFIG);
+
+                peer.on('open', function(id) {
+                    document.getElementById('host-status').innerText = "Ready. Enter PIN on tablet.";
+                });
+
+                peer.on('call', function(call) {
+                    call.answer(localStream);
+                    document.getElementById('host-status').innerText = "Tablet connected (WebRTC)!";
+                    document.getElementById('host-status').style.color = "#4ade80";
+                });
+
+                // Canvas Frame Sender fallback for KitKat browsers that fail WebRTC video
+                peer.on('connection', function(conn) {
+                    activeDataConn = conn;
+                    document.getElementById('host-status').innerText = "Tablet connected (DataChannel)!";
+                    document.getElementById('host-status').style.color = "#4ade80";
+
+                    // Start pushing Canvas snapshot frames via DataChannel
+                    startFramePusher(conn);
+                });
+
+                peer.on('error', function(err) {
+                    document.getElementById('host-status').innerText = "Host error: " + err.type;
+                });
+
+            }).catch(function(err) {
+                alert("Permission denied or capture cancelled.");
+            });
+        }
+
+        // Snapshot fallback generator
+        function startFramePusher(conn) {
+            var hiddenVideo = document.createElement('video');
+            hiddenVideo.srcObject = localStream;
+            hiddenVideo.play();
+
+            var canvas = document.createElement('canvas');
+            var ctx = canvas.getContext('2d');
+
+            setInterval(function() {
+                if (conn.open && hiddenVideo.videoWidth > 0) {
+                    canvas.width = 640;
+                    canvas.height = 360;
+                    ctx.drawImage(hiddenVideo, 0, 0, canvas.width, canvas.height);
+                    var base64 = canvas.toDataURL('image/jpeg', 0.5);
+                    conn.send({ type: 'frame', data: base64 });
+                }
+            }, 50); // ~20 FPS fallback stream
+        }
+
+        // ================= TABLET (RECEIVER) =================
+        function showTabletLogin() {
+            document.getElementById('selection-card').className += " hidden";
+            document.getElementById('tablet-card').className = document.getElementById('tablet-card').className.replace("hidden", "");
+        }
+
+        function connectTablet() {
+            var pinInput = document.getElementById('input-pin');
+            var pin = pinInput.value.replace(/\s+/g, '');
+            
+            if (pin.length !== 4) {
+                alert("Enter a 4-digit PIN.");
+                return;
+            }
+
+            var statusEl = document.getElementById('tablet-status');
+            statusEl.innerText = "Connecting to server...";
+            statusEl.style.color = "#fbbf24";
+
+            // Random ID for tablet
+            peer = new Peer(PEER_CONFIG);
+
+            peer.on('open', function() {
+                statusEl.innerText = "Finding laptop PIN...";
+                var targetId = PREFIX + pin;
+
+                // 1. Open Data Connection (Reliable on KitKat)
+                var conn = peer.connect(targetId, { reliable: false });
+                
+                conn.on('open', function() {
+                    document.getElementById('tablet-card').className += " hidden";
+                    document.getElementById('display-view').className = document.getElementById('display-view').className.replace("hidden", "");
+                });
+
+                conn.on('data', function(msg) {
+                    if (msg.type === 'frame') {
+                        // Render canvas frame
+                        var video = document.getElementById('stream-video');
+                        var canvas = document.getElementById('fallback-canvas');
+                        video.className = "hidden";
+                        canvas.className = "";
+                        
+                        var ctx = canvas.getContext('2d');
+                        var img = new Image();
+                        img.onload = function() {
+                            canvas.width = window.innerWidth;
+                            canvas.height = window.innerHeight;
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        };
+                        img.src = msg.data;
+                    }
+                });
+
+                // 2. Attempt WebRTC Media Call
+                try {
+                    var call = peer.call(targetId, null);
+                    if (call) {
+                        call.on('stream', function(remoteStream) {
+                            document.getElementById('tablet-card').className += " hidden";
+                            var displayView = document.getElementById('display-view');
+                            var video = document.getElementById('stream-video');
+                            displayView.className = displayView.className.replace("hidden", "");
+                            
+                            try {
+                                video.srcObject = remoteStream;
+                            } catch (e) {
+                                video.src = (window.URL || window.webkitURL).createObjectURL(remoteStream);
+                            }
+                            video.play();
+                        });
+                    }
+                } catch(e) {}
+            });
+
+            peer.on('error', function(err) {
+                statusEl.innerText = "Error: Invalid PIN or Laptop offline (" + err.type + ")";
+                statusEl.style.color = "#f87171";
+            });
+        }
+    </script>
+</body>
+</html>
