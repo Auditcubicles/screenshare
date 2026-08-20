@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Extended Screen & Controller</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: none;
+        }
+        .container {
+            width: 90%;
+            max-width: 440px;
+            background: #1e293b;
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            text-align: center;
+        }
+        h2 { margin-bottom: 12px; font-size: 1.3rem; color: #38bdf8; }
+        p { font-size: 0.88rem; color: #94a3b8; margin-bottom: 20px; line-height: 1.4; }
+        .btn {
+            width: 100%;
+            padding: 12px;
+            margin: 8px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .btn-primary { background: #0284c7; color: white; }
+        .btn-success { background: #16a34a; color: white; }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            background: #0f172a;
+            color: #fff;
+            font-size: 1.2rem;
+            text-align: center;
+            letter-spacing: 4px;
+            margin-bottom: 12px;
+            outline: none;
+        }
+        .code-box {
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: 6px;
+            color: #38bdf8;
+            background: #0f172a;
+            padding: 14px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        .hidden { display: none !important; }
+        
+        #display-container {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            background: #000;
+            z-index: 9999;
+            overflow: hidden;
+        }
+        video {
+            width: 100%; height: 100%;
+            object-fit: fill;
+            pointer-events: none;
+        }
+        .status { font-size: 0.85rem; color: #fbbf24; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <!-- Role Selection -->
+    <div id="selection-card" class="container">
+        <h2>Extended Screen Hub</h2>
+        <p>Select device mode:</p>
+        <button class="btn btn-primary" onclick="initLaptop()">💻 Laptop (Host Screen)</button>
+        <button class="btn btn-success" onclick="showTabletLogin()">📱 Tablet (Receiver & Touch)</button>
+    </div>
+
+    <!-- Laptop Host Screen -->
+    <div id="laptop-card" class="container hidden">
+        <h2>Host Authentication PIN</h2>
+        <p>Enter this unique 4-digit code on your Dell Venue tablet:</p>
+        <div id="display-pin" class="code-box">----</div>
+        <p class="status" id="host-status">Select screen/display to start sharing...</p>
+    </div>
+
+    <!-- Tablet Receiver Screen -->
+    <div id="tablet-card" class="container hidden">
+        <h2>Tablet Authentication</h2>
+        <p>Enter the 4-digit PIN displayed on your laptop:</p>
+        <input type="text" id="input-pin" placeholder="••••" maxlength="4" inputmode="numeric">
+        <button class="btn btn-success" onclick="connectTablet()">Connect & Control</button>
+        <p class="status" id="tablet-status"></p>
+    </div>
+
+    <!-- Tablet Viewport with Touch Tracking -->
+    <div id="display-container" class="hidden">
+        <video id="stream-video" autoplay playsinline muted></video>
+    </div>
+
+    <script>
+        const PEER_PREFIX = "ext-screen-hub-";
+        let peerInstance = null;
+        let dataConnection = null;
+
+        function getPin() {
+            return Math.floor(1000 + Math.random() * 9000).toString();
+        }
+
+        // --- LAPTOP HOST LOGIC ---
+        async function initLaptop() {
+            try {
+                const mediaStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { frameRate: { ideal: 30, max: 60 } },
+                    audio: false
+                });
+
+                const pin = getPin();
+                document.getElementById('display-pin').innerText = pin;
+                document.getElementById('selection-card').classList.add('hidden');
+                document.getElementById('laptop-card').classList.remove('hidden');
+
+                peerInstance = new Peer(PEER_PREFIX + pin);
+
+                peerInstance.on('call', (call) => {
+                    call.answer(mediaStream);
+                    document.getElementById('host-status').innerText = "Tablet connected! Streaming extended screen.";
+                    document.getElementById('host-status').style.color = "#4ade80";
+                });
+
+                // Listen for touch/click events from tablet
+                peerInstance.on('connection', (conn) => {
+                    dataConnection = conn;
+                    conn.on('data', (data) => {
+                        // Forward to local Python helper via WebSocket if running
+                        if (window.localControlWs && window.localControlWs.readyState === WebSocket.OPEN) {
+                            window.localControlWs.send(JSON.stringify(data));
+                        }
+                    });
+                });
+
+                // Connect to local python companion for OS mouse emulation
+                try {
+                    window.localControlWs = new WebSocket("ws://localhost:8765");
+                } catch(e) {}
+
+            } catch (err) {
+                alert("Permission denied or display picker cancelled.");
+            }
+        }
+
+        // --- TABLET RECEIVER LOGIC ---
+        function showTabletLogin() {
+            document.getElementById('selection-card').classList.add('hidden');
+            document.getElementById('tablet-card').classList.remove('hidden');
+        }
+
+        function connectTablet() {
+            const enteredPin = document.getElementById('input-pin').value.trim();
+            if (enteredPin.length !== 4) {
+                alert("Please enter a valid 4-digit PIN.");
+                return;
+            }
+
+            const status = document.getElementById('tablet-status');
+            status.innerText = "Authenticating PIN...";
+
+            peerInstance = new Peer();
+
+            peerInstance.on('open', () => {
+                const call = peerInstance.call(PEER_PREFIX + enteredPin, null);
+                dataConnection = peerInstance.connect(PEER_PREFIX + enteredPin);
+
+                call.on('stream', (stream) => {
+                    document.getElementById('tablet-card').classList.add('hidden');
+                    const container = document.getElementById('display-container');
+                    const video = document.getElementById('stream-video');
+                    
+                    container.classList.remove('hidden');
+                    video.srcObject = stream;
+                    video.play();
+
+                    // Attach Touch Controller
+                    setupTouchControls(container);
+
+                    if (container.requestFullscreen) container.requestFullscreen();
+                    else if (container.webkitRequestFullscreen) container.webkitRequestFullscreen();
+                });
+
+                call.on('error', () => {
+                    status.innerText = "Invalid PIN or host is offline.";
+                    status.style.color = "#f87171";
+                });
+            });
+
+            peerInstance.on('error', () => {
+                status.innerText = "Connection failed. Please check the PIN.";
+                status.style.color = "#f87171";
+            });
+        }
+
+        // --- SEND TABLET TOUCH INPUTS TO LAPTOP ---
+        function setupTouchControls(targetElement) {
+            targetElement.addEventListener('touchstart', handleTouch, { passive: false });
+            targetElement.addEventListener('click', handleClick, { passive: false });
+        }
+
+        function handleTouch(e) {
+            if (!dataConnection || !dataConnection.open) return;
+            const touch = e.touches[0];
+            const normX = touch.clientX / window.innerWidth;
+            const normY = touch.clientY / window.innerHeight;
+            dataConnection.send({ type: 'click', x: normX, y: normY });
+        }
+
+        function handleClick(e) {
+            if (!dataConnection || !dataConnection.open) return;
+            const normX = e.clientX / window.innerWidth;
+            const normY = e.clientY / window.innerHeight;
+            dataConnection.send({ type: 'click', x: normX, y: normY });
+        }
+    </script>
+</body>
+</html>
